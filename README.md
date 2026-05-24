@@ -7,6 +7,7 @@ API REST para acortar URLs, construida con ASP.NET Core, SQL Server y Redis.
 ## Requisitos previos
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) (requerido para correr los tests localmente)
 
 ---
 
@@ -102,7 +103,10 @@ docker compose up -d
 
 ### Correr todos los tests
 
+Desde el directorio `UrlShortener.Tests/`:
+
 ```bash
+cd UrlShortener.Tests
 dotnet test
 ```
 
