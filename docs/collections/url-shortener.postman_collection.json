@@ -1,0 +1,152 @@
+{
+  "info": {
+    "name": "URL Shortener",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Colección completa para probar la API de URL Shortener corriendo con Docker en localhost:5000.\n\n**Setup:**\n1. `docker compose up --build`\n2. Importar esta colección en Postman\n3. Ejecutar primero «Login» — el token se guarda automáticamente\n4. El resto de los requests lo usan sin intervención manual"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "shortCode",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.token) {",
+                  "    pm.collectionVariables.set('token', json.token);",
+                  "    console.log('Token guardado en la variable de colección «token»');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"test\",\n  \"password\": \"1234\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Obtiene un token JWT. El script de tests lo guarda automáticamente en la variable `token` de la colección para que los demás requests lo usen sin intervención manual."
+          }
+        }
+      ]
+    },
+    {
+      "name": "URLs",
+      "item": [
+        {
+          "name": "Acortar URL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.shortUrl) {",
+                  "    const parts = json.shortUrl.split('/');",
+                  "    const code = parts[parts.length - 1];",
+                  "    pm.collectionVariables.set('shortCode', code);",
+                  "    console.log('shortCode guardado:', code);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"longUrl\": \"https://www.google.com/search?q=url+shortener+postman\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/url/shorten",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "url", "shorten"]
+            },
+            "description": "Acorta una URL larga. El script de tests extrae el `shortCode` de la respuesta y lo guarda en la variable de colección para usarlo en el siguiente request."
+          }
+        },
+        {
+          "name": "Resolver URL corta (redirect)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/url/{{shortCode}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "url", "{{shortCode}}"]
+            },
+            "description": "Resuelve un código corto y redirige (HTTP 302) a la URL original.\n\nPostman sigue el redirect automáticamente por defecto. Para ver el 302 crudo desactivá «Follow redirects» en la configuración del request (Settings → desactivar «Automatically follow redirects»)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Observabilidad",
+      "item": [
+        {
+          "name": "Métricas Prometheus",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": ["{{baseUrl}}"],
+              "path": ["metrics"]
+            },
+            "description": "Expone métricas en formato Prometheus:\n- `urls_created_total` — total de URLs acortadas\n- `urls_redirected_total` — total de redirecciones resueltas\n- Métricas HTTP automáticas de ASP.NET Core"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,89 +1,147 @@
 # URL Shortener - Design Document
 
-## 1. Architectural Choices
+## 1. Arquitectura
 
-### Clean Architecture
+### Clean Architecture (4 capas)
 
-El sistema sigue una arquitectura en capas (Clean Architecture) para asegurar separación de responsabilidades y facilidad de mantenimiento:
+El sistema sigue Clean Architecture para asegurar separación de responsabilidades y facilidad de mantenimiento:
 
-- **Core**  
-  Contiene entidades (`UrlTable`), DTOs, interfaces y excepciones de negocio.  
-  → Mantiene el dominio puro y sin dependencias externas.
+```
+UrlShortener.Core          → Dominio puro, sin dependencias externas
+UrlShortener.Application   → Orquestación de lógica de negocio y DTOs
+UrlShortener.Infrastructure → EF Core, Redis, acceso a datos
+UrlShortener.Api           → Controladores, middleware, HTTP
+UrlShortener.Tests         → Tests unitarios, de integración y carga
+```
 
-- **Application**  
-  Contiene servicios (`UrlService`) que orquestan la lógica de negocio.  
-  → Usa interfaces de Core y delega persistencia/caché a Infrastructure.
+#### Core
+- Entidad principal: `UrlTable` (Id, LongUrl, ShortCode, CreatedOnUtc)
+- Interfaces de contrato: `IUrlService`, `IUrlRepository`, `ICacheService`
+- Sin dependencias externas.
 
-- **Infrastructure**  
-  Contiene implementaciones técnicas:
-  - `UrlRepository` (EF Core para SQL)
-  - `RedisCacheService` (StackExchange.Redis)  
-    → Encapsula detalles de almacenamiento y caché.
+#### Application
+- `UrlService`: orquesta creación y resolución de URLs
+  - Consulta primero Redis, hace fallback a SQL si cache miss
+  - Registra métricas Prometheus (`urls_created_total`, `urls_redirected_total`)
+- `RedisCacheService`: implementa `ICacheService` con TTL de 10 minutos y degradación graceful ante fallos
+- DTOs: `CreateShortenUrlRequest`, `CreateShortenUrlResponse`, `LoginRequest`
 
-- **Api**  
-  Contiene controladores (`AuthController`, `UrlController`) y middleware global de errores.  
-  → Expone endpoints REST y traduce excepciones en respuestas HTTP limpias.
+#### Infrastructure
+- `UrlRepository` (EF Core): inserta la URL, genera el shortCode Base62 a partir del ID autogenerado, y actualiza el registro
+- `UrlShortenerDbContext`: configura índice único en `ShortCode` con collation `Latin1_General_100_BIN2` (case-sensitive) e índice en `LongUrl`
+- `Base62Converter`: codifica IDs enteros a base62 (0-9, a-z, A-Z), produciendo códigos cortos, legibles y URL-safe
+- 4 migraciones EF Core (InitialCreate → AddIndexes → MakeShortCodeNullable → MakeShortCodeCaseSensitive)
 
-### Error Handling
-
-- Middleware global (`ErrorHandlingMiddleware`) que captura todas las excepciones y devuelve un JSON uniforme `{ code, message, timestamp }`.
-- Excepciones personalizadas en Core (`UrlNotFoundException`, `DuplicateUrlException`).
-- Logging en cada capa para trazabilidad.
-
-### Security
-
-- Autenticación con JWT en `AuthController`.
-- Roles básicos (`User`) para proteger endpoints.
-
-### Caching
-
-- Redis como caché distribuido para mejorar performance en redirecciones.
-- Fallback seguro: si Redis falla, se consulta SQL.
-
----
-
-## 2. Trade-offs
-
-- **Base62 vs GUID**  
-  Se eligió Base62 para generar shortCodes legibles y compactos. GUIDs serían más robustos pero menos amigables.
-- **Redis vs InMemoryCache**  
-  Redis permite escalabilidad horizontal. InMemoryCache sería más simple pero no soporta múltiples instancias.
-- **Middleware global vs try/catch en controllers**  
-  Se prefirió middleware global para centralizar manejo de errores y evitar duplicación de lógica.
-- **EF Core vs Dapper**  
-  EF Core facilita el desarrollo y pruebas con LINQ y migraciones. Dapper sería más rápido pero menos expresivo.
+#### Api
+- `AuthController` POST `/api/auth/login` → devuelve JWT (exp: 60 min)
+- `UrlController`:
+  - POST `/api/url/shorten` → crea URL corta, requiere JWT
+  - GET `/api/url/{shortCode}` → HTTP 302 redirect al original, requiere JWT
+- `ErrorHandlingMiddleware`: captura todas las excepciones y responde con `{ code, message, timestamp }`
 
 ---
 
-## 3. Use of AI
+## 2. Stack Tecnológico
 
-Durante el desarrollo se usaron herramientas de AI (Copilot, ClaudeCode, etc.) para:
-
-- Generar código base de controladores y servicios.
-- Proponer patrones de manejo de errores y logging.
-- Sugerir estructura de carpetas y aplicación de Clean Architecture.
-- Documentar funciones y clases con comentarios claros.
-
-**Decisión consciente:**
-
-- Todo código generado por AI fue revisado, adaptado y comentado para asegurar comprensión total.
-- Se evitó “AI slop” manteniendo el código limpio, consistente y con tests unitarios.
-
----
-
-## 4. Testing
-
-- Tests unitarios para `UrlService` (crear y obtener URLs).
-- Tests para `Base62Converter`.
-- Tests de integración para `UrlController` con un `TestServer`.
-- Tests de middleware para verificar formato de errores.
+| Componente      | Tecnología                                      |
+|-----------------|-------------------------------------------------|
+| Runtime         | .NET 10.0 / ASP.NET Core                        |
+| Base de datos   | SQL Server 2022 (EF Core 10)                    |
+| Caché           | Redis (StackExchange.Redis 2.13)                |
+| Autenticación   | JWT Bearer (Microsoft.AspNetCore.Authentication)|
+| Métricas        | Prometheus (`prometheus-net.AspNetCore`)        |
+| Observabilidad  | OpenTelemetry 1.15                              |
+| Contenedores    | Docker Compose (API + SQL Server + Redis)       |
+| Tests           | xUnit 2.9.3 + coverlet                         |
 
 ---
 
-## 5. Deployment
+## 3. Trade-offs
 
-- `docker-compose.yml` con API + SQL Server + Redis.
-- Facilita levantar todo el sistema con un solo comando.
-- Preparado para entrevistas y entornos de prueba.
+- **Base62 vs GUID**: Base62 produce códigos compactos y legibles (`G8` en lugar de un UUID). Los GUIDs serían más únicos globalmente pero no son URL-friendly.
+- **Redis vs InMemoryCache**: Redis permite escalar horizontalmente con múltiples instancias de API. InMemory sería más simple pero los cachés no se compartirían entre instancias.
+- **EF Core vs Dapper**: EF Core facilita las migraciones y consultas con LINQ. Dapper tendría mejor throughput puro, pero más código manual.
+- **Middleware global vs try/catch en controllers**: El middleware centraliza el manejo de errores y evita duplicación. Permite un formato de respuesta uniforme sin tocar cada controller.
+- **Generación del shortCode en dos pasos**: Se inserta primero la entidad para obtener el ID autogenerado y luego se codifica en Base62. Esto garantiza unicidad sin lógica adicional de colisiones.
 
 ---
+
+## 4. Manejo de Errores
+
+El `ErrorHandlingMiddleware` mapea excepciones a respuestas HTTP:
+
+| Excepción                  | HTTP Status          |
+|----------------------------|----------------------|
+| `ArgumentException`        | 400 Bad Request      |
+| `KeyNotFoundException`     | 404 Not Found        |
+| `UnauthorizedAccessException` | 401 Unauthorized  |
+| Cualquier otra             | 500 Internal Server Error |
+
+Formato de respuesta siempre: `{ "code": 4xx/5xx, "message": "...", "timestamp": "..." }`
+
+---
+
+## 5. Seguridad
+
+- JWT con claims de nombre y rol (`User`) firmado con clave simétrica HS256
+- Todos los endpoints de `UrlController` requieren autenticación
+- HTTPS habilitado para producción
+- Collation case-sensitive en `ShortCode` para evitar colisiones silenciosas (`abc` ≠ `ABC`)
+
+---
+
+## 6. Observabilidad
+
+- **Prometheus**: métricas expuestas en `/metrics`
+  - `urls_created_total`: contador de URLs acortadas creadas
+  - `urls_redirected_total`: contador de redirecciones resueltas
+- **OpenTelemetry**: trazas distribuidas configuradas
+- **Structured logging**: `ILogger<T>` en todas las capas
+
+---
+
+## 7. Caching
+
+- Redis como caché distribuido con TTL de 10 minutos por entrada
+- Fallback automático a SQL si Redis no está disponible (timeout o conexión rechazada)
+- La clave de caché es el `shortCode`; el valor es el `longUrl`
+
+---
+
+## 8. Testing
+
+| Archivo                    | Tipo        | Descripción                                             |
+|----------------------------|-------------|---------------------------------------------------------|
+| `UrlControllerTests.cs`    | Integración | POST/GET de endpoints, tests de estrés paralelos (1000 requests) |
+| `CacheTests.cs`            | Integración | Verifica que Redis acelera requests repetidos           |
+| `ErrorHandlingTests.cs`    | Unitario    | Formato y status codes de respuestas de error           |
+| `MiddlewareTests.cs`       | Unitario    | Comportamiento del `ErrorHandlingMiddleware`            |
+| `LoadTests.cs`             | Carga       | Benchmarking y medición de performance bajo carga       |
+| `JwtTestHelper.cs`         | Helper      | Genera tokens JWT válidos para los tests                |
+
+---
+
+## 9. Deployment
+
+```yaml
+# docker-compose.yml
+services:
+  api:      # UrlShortener.Api — puerto 5000 → 8080
+  sqlserver: # SQL Server 2022 — puerto 1433
+  redis:    # Redis latest — puerto 6379
+```
+
+Levantar todo el sistema: `docker compose up --build`
+
+---
+
+## 10. Uso de AI
+
+Durante el desarrollo se usaron herramientas de AI (GitHub Copilot, Claude Code) para:
+
+- Generar código base de controladores, servicios y repositorios
+- Proponer patrones de manejo de errores y logging estructurado
+- Sugerir estructura de carpetas bajo Clean Architecture
+- Escribir y refinar tests de integración y carga
+
+**Criterio aplicado**: todo código generado por AI fue revisado, adaptado y validado manualmente. Se priorizó mantener el código limpio, consistente y cubierto por tests.
