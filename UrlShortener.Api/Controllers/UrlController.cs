@@ -42,6 +42,7 @@ namespace UrlShortener.Api.Controllers
             return BadRequest(new { message = "ShortCode is required." });
         }
 
+        [AllowAnonymous]
         [HttpGet("{shortCode}")]
         public async Task<IActionResult> GetLongUrl(string shortCode)
         {

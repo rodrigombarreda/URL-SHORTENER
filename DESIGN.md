@@ -27,16 +27,16 @@ UrlShortener.Tests         → Tests unitarios, de integración y carga
 - DTOs: `CreateShortenUrlRequest`, `CreateShortenUrlResponse`, `LoginRequest`
 
 #### Infrastructure
-- `UrlRepository` (EF Core): inserta la URL, genera el shortCode Base62 a partir del ID autogenerado, y actualiza el registro
-- `UrlShortenerDbContext`: configura índice único en `ShortCode` con collation `Latin1_General_100_BIN2` (case-sensitive) e índice en `LongUrl`
-- `Base62Converter`: codifica IDs enteros a base62 (0-9, a-z, A-Z), produciendo códigos cortos, legibles y URL-safe
-- 4 migraciones EF Core (InitialCreate → AddIndexes → MakeShortCodeNullable → MakeShortCodeCaseSensitive)
+- `UrlRepository` (EF Core): inserta la URL dentro de una transacción, genera el shortCode Base62 a partir del ID autogenerado, y maneja violaciones de unique constraint (race conditions)
+- `UrlShortenerDbContext`: índice único en `ShortCode` (case-sensitive, collation `Latin1_General_100_BIN2`) e índice único en `LongUrl` (garantía de deduplicación a nivel DB)
+- `Base62Converter`: codifica IDs enteros a base62 usando `Span<char>` en stack (zero heap allocations)
+- 5 migraciones EF Core (InitialCreate → AddIndexes → MakeShortCodeNullable → MakeShortCodeCaseSensitive → AddUniqueLongUrlConstraint)
 
 #### Api
 - `AuthController` POST `/api/auth/login` → devuelve JWT (exp: 60 min)
 - `UrlController`:
   - POST `/api/url/shorten` → crea URL corta, requiere JWT
-  - GET `/api/url/{shortCode}` → HTTP 302 redirect al original, requiere JWT
+  - GET `/api/url/{shortCode}` → HTTP 302 redirect al original, público (`[AllowAnonymous]`)
 - `ErrorHandlingMiddleware`: captura todas las excepciones y responde con `{ code, message, timestamp }`
 
 ---
@@ -52,7 +52,7 @@ UrlShortener.Tests         → Tests unitarios, de integración y carga
 | Métricas        | Prometheus (`prometheus-net.AspNetCore`)        |
 | Observabilidad  | OpenTelemetry 1.15                              |
 | Contenedores    | Docker Compose (API + SQL Server + Redis)       |
-| Tests           | xUnit 2.9.3 + coverlet                         |
+| Tests           | xUnit 2.9.3 + NSubstitute 5.3.0 + coverlet     |
 
 ---
 
@@ -62,7 +62,8 @@ UrlShortener.Tests         → Tests unitarios, de integración y carga
 - **Redis vs InMemoryCache**: Redis permite escalar horizontalmente con múltiples instancias de API. InMemory sería más simple pero los cachés no se compartirían entre instancias.
 - **EF Core vs Dapper**: EF Core facilita las migraciones y consultas con LINQ. Dapper tendría mejor throughput puro, pero más código manual.
 - **Middleware global vs try/catch en controllers**: El middleware centraliza el manejo de errores y evita duplicación. Permite un formato de respuesta uniforme sin tocar cada controller.
-- **Generación del shortCode en dos pasos**: Se inserta primero la entidad para obtener el ID autogenerado y luego se codifica en Base62. Esto garantiza unicidad sin lógica adicional de colisiones.
+- **Generación del shortCode en dos pasos**: Se inserta primero la entidad para obtener el ID autogenerado y luego se codifica en Base62. Ambas operaciones se envuelven en una transacción para evitar registros sin shortCode si el segundo save falla.
+- **Race condition en creación**: En lugar de un distributed lock (más complejo), se usa un unique constraint en `LongUrl` a nivel DB. Si dos requests concurrentes intentan crear la misma URL, uno gana y el otro atrapa la `DbUpdateException`, hace rollback y retorna el registro ya existente. Simple, correcto y sin dependencias adicionales.
 
 ---
 
@@ -84,7 +85,7 @@ Formato de respuesta siempre: `{ "code": 4xx/5xx, "message": "...", "timestamp":
 ## 5. Seguridad
 
 - JWT con claims de nombre y rol (`User`) firmado con clave simétrica HS256
-- Todos los endpoints de `UrlController` requieren autenticación
+- El endpoint de creación (`POST /shorten`) requiere JWT; el redirect (`GET /{shortCode}`) es público por diseño
 - HTTPS habilitado para producción
 - Collation case-sensitive en `ShortCode` para evitar colisiones silenciosas (`abc` ≠ `ABC`)
 
@@ -103,21 +104,27 @@ Formato de respuesta siempre: `{ "code": 4xx/5xx, "message": "...", "timestamp":
 ## 7. Caching
 
 - Redis como caché distribuido con TTL de 10 minutos por entrada
-- Fallback automático a SQL si Redis no está disponible (timeout o conexión rechazada)
-- La clave de caché es el `shortCode`; el valor es el `longUrl`
+- Fallback automático a SQL si Redis no está disponible: `GetAsync` retorna null, `SetAsync` loguea el error y continúa — el cache es una optimización, no un hard dependency
+- Dos claves de caché por URL, para poder buscar en ambas direcciones:
+  - `url:<shortCode>` → longUrl (usada por el flujo de redirect)
+  - `longurl:<longUrl>` → shortCode (usada por el flujo de creación para deduplicar)
+- El cache se popula en la creación (`CreateShortUrlAsync`), no solo en el primer redirect
+- Flujo de `CreateShortUrlAsync`: check cache → check DB → crear; en cada paso se populan ambas keys
 
 ---
 
 ## 8. Testing
 
-| Archivo                    | Tipo        | Descripción                                             |
-|----------------------------|-------------|---------------------------------------------------------|
-| `UrlControllerTests.cs`    | Integración | POST/GET de endpoints, tests de estrés paralelos (1000 requests) |
-| `CacheTests.cs`            | Integración | Verifica que Redis acelera requests repetidos           |
-| `ErrorHandlingTests.cs`    | Unitario    | Formato y status codes de respuestas de error           |
-| `MiddlewareTests.cs`       | Unitario    | Comportamiento del `ErrorHandlingMiddleware`            |
-| `LoadTests.cs`             | Carga       | Benchmarking y medición de performance bajo carga       |
-| `JwtTestHelper.cs`         | Helper      | Genera tokens JWT válidos para los tests                |
+| Archivo                      | Tipo        | Descripción                                                                 |
+|------------------------------|-------------|-----------------------------------------------------------------------------|
+| `IntegrationTestBase.cs`     | Base        | Setup compartido: HttpClient autenticado, sin auth, y helpers reutilizables |
+| `UrlControllerTests.cs`      | Integración | Happy path (crear + redirigir) y comportamiento de autenticación            |
+| `CacheTests.cs`              | Integración | Deduplicación secuencial y bajo 100 requests concurrentes (race condition)  |
+| `ErrorHandlingTests.cs`      | Integración | Status codes y mensajes ante inputs inválidos y recursos inexistentes       |
+| `MiddlewareTests.cs`         | Integración | Estructura JSON completa del error (`code`, `message`, `timestamp`, Content-Type) |
+| `LoadTests.cs`               | Carga       | 1000 requests paralelos de escritura y lectura; mide throughput             |
+| `IntegrationTestsCollection.cs` | Config   | Deshabilita paralelismo entre clases para evitar conflictos en DB y Redis   |
+| `JwtTestHelper.cs`           | Helper      | Genera tokens JWT válidos para los tests                                    |
 
 ---
 

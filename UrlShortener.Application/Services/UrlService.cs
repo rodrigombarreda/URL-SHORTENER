@@ -28,6 +28,17 @@ namespace UrlShortener.Application.Services
 
         public async Task<string> CreateShortUrlAsync(string longUrl)
         {
+            var cachedShortCode = await _cacheService.GetAsync($"longurl:{longUrl}");
+            if (!string.IsNullOrEmpty(cachedShortCode))
+                return cachedShortCode;
+
+            var existing = await _urlRepository.GetByLongUrlAsync(longUrl);
+            if (existing != null)
+            {
+                await CacheUrlMappingAsync(existing.LongUrl, existing.ShortCode!);
+                return existing.ShortCode!;
+            }
+
             var urlTable = new UrlTable
             {
                 LongUrl = longUrl,
@@ -36,11 +47,21 @@ namespace UrlShortener.Application.Services
 
             string shortCode = await _urlRepository.CreateAsync(urlTable);
 
+            await CacheUrlMappingAsync(longUrl, shortCode);
+
             _logger.LogInformation("ID: {Id} - ShortCode: {ShortCode}", urlTable.Id, shortCode);
             UrlsCreated.Inc();
 
             return shortCode;
         }
+
+        private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
+
+        private Task CacheUrlMappingAsync(string longUrl, string shortCode) =>
+            Task.WhenAll(
+                _cacheService.SetAsync($"longurl:{longUrl}", shortCode, CacheTtl),
+                _cacheService.SetAsync($"url:{shortCode}", longUrl, CacheTtl)
+            );
 
         public async Task<string> GetLongUrlAsync(string shortCode)
         {
@@ -59,7 +80,7 @@ namespace UrlShortener.Application.Services
                 var urlTable = await _urlRepository.GetByShortCodeAsync(shortCode)
                     ?? throw new KeyNotFoundException($"No URL found for shortcode {shortCode}");
 
-                await _cacheService.SetAsync($"url:{shortCode}", urlTable.LongUrl, TimeSpan.FromMinutes(10));
+                await _cacheService.SetAsync($"url:{shortCode}", urlTable.LongUrl, CacheTtl);
                 UrlsRedirected.Inc();
 
                 return urlTable.LongUrl;

@@ -6,5 +6,6 @@ namespace UrlShortener.Core.Repositories
     {
         Task<string> CreateAsync(UrlTable urlTable);
         Task<UrlTable?> GetByShortCodeAsync(string shortCode);
+        Task<UrlTable?> GetByLongUrlAsync(string longUrl);
     }
 }

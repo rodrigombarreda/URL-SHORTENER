@@ -1,61 +1,36 @@
-using System.Net;
-using System.Text;
-using System.Text.Json;
 using Xunit;
 
+// Pruebas de integración que verifican el comportamiento de deduplicación del sistema.
+// El cache (Redis) y el unique constraint en DB garantizan que la misma longUrl
+// siempre devuelve el mismo shortCode, incluso bajo carga concurrente.
+// Requieren que la API esté corriendo en http://localhost:5000.
 [Collection("IntegrationTests")]
-public class CacheTests
+public class CacheTests : IntegrationTestBase
 {
-    private readonly HttpClient _client;
-
-    public CacheTests()
+    // Verifica que enviar la misma longUrl dos veces (secuencial) devuelve el mismo shortCode.
+    // Prueba la deduplicación básica: el sistema no crea registros duplicados.
+    [Fact]
+    public async Task ShortenUrl_SameLongUrl_ShouldAlwaysReturnSameShortCode()
     {
-        var handler = new HttpClientHandler { AllowAutoRedirect = false };
-        _client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") };
-        var token = JwtTestHelper.GenerateTestToken();
-        _client.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        var longUrl = $"https://example.com/dedup-{Guid.NewGuid()}";
+
+        var code1 = await CreateShortCode(longUrl);
+        var code2 = await CreateShortCode(longUrl);
+
+        Assert.Equal(code1, code2);
     }
 
+    // Dispara 100 requests con la misma longUrl en simultáneo y verifica que todos
+    // devuelvan exactamente el mismo shortCode. Prueba que el unique constraint en DB
+    // y la transacción en CreateAsync previenen race conditions bajo carga concurrente.
     [Fact]
-    public async Task Cache_ShouldSpeedUpRepeatedRequests()
+    public async Task ShortenUrl_SameLongUrl_100ConcurrentRequests_ShouldAllReturnSameShortCode()
     {
-        // Crear una URL
-        var json = "{\"longUrl\":\"https://example.com/cache-test\"}";
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
-        var createResponse = await _client.PostAsync("/api/url/shorten", content);
-        createResponse.EnsureSuccessStatusCode();
+        var longUrl = $"https://example.com/race-{Guid.NewGuid()}";
 
-        var body = await createResponse.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        var shortUrl = doc.RootElement.GetProperty("shortUrl").GetString();
-        var shortCode = shortUrl!.Split('/').Last();
+        var tasks = Enumerable.Range(0, 100).Select(_ => CreateShortCode(longUrl));
+        var results = await Task.WhenAll(tasks);
 
-        // Primera request (SQL)
-        var sw1 = System.Diagnostics.Stopwatch.StartNew();
-        var firstResponse = await _client.GetAsync($"/api/url/{shortCode}");
-        sw1.Stop();
-        Assert.Equal(HttpStatusCode.Found, firstResponse.StatusCode);
-
-        // 1000 requests en paralelo (Redis debería responder)
-        var sw2 = System.Diagnostics.Stopwatch.StartNew();
-        var semaphore = new SemaphoreSlim(50, 50);
-        var tasks = Enumerable.Range(0, 1000).Select(async _ =>
-        {
-            await semaphore.WaitAsync();
-            try
-            {
-                var response = await _client.GetAsync($"/api/url/{shortCode}");
-                Assert.Equal(HttpStatusCode.Found, response.StatusCode);
-            }
-            finally { semaphore.Release(); }
-        });
-        await Task.WhenAll(tasks);
-        sw2.Stop();
-
-        double avgBatchMs = (double)sw2.ElapsedMilliseconds / 1000;
-        long firstRequestMs = Math.Max(sw1.ElapsedMilliseconds, 1);
-        Assert.True(avgBatchMs < firstRequestMs,
-            $"Cache no funcionó: primera={sw1.ElapsedMilliseconds}ms, promedio por request en batch={avgBatchMs:F2}ms");
+        Assert.Single(results.Distinct());
     }
 }

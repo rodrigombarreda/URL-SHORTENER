@@ -34,17 +34,14 @@ public class RedisCacheService : ICacheService
         catch (RedisTimeoutException ex)
         {
             _logger.LogError(ex, "Redis timeout while setting key {Key}", key);
-            throw new ApplicationException("Cache timeout", ex);
         }
         catch (RedisConnectionException ex)
         {
             _logger.LogError(ex, "Redis connection error while setting key {Key}", key);
-            throw new ApplicationException("Cache unavailable", ex);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error while setting key {Key}", key);
-            throw;
         }
     }
 
@@ -69,17 +66,17 @@ public class RedisCacheService : ICacheService
         catch (RedisTimeoutException ex)
         {
             _logger.LogError(ex, "Redis timeout while getting key {Key}", key);
-            return null; // fallback: no cache
+            return null;
         }
         catch (RedisConnectionException ex)
         {
             _logger.LogError(ex, "Redis connection error while getting key {Key}", key);
-            return null; // fallback: no cache
+            return null;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error while getting key {Key}", key);
-            return null; // fallback: no cache
+            return null;
         }
     }
 }

@@ -6,13 +6,13 @@ using UrlShortener.Infrastructure.Extensions;
 using UrlShortener.Application.Extensions;
 using UrlShortener.Infrastructure.Data;
 using StackExchange.Redis;
-using Prometheus; // 👈 importante
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Configuración JWT
 var jwtSettings = builder.Configuration.GetSection("Jwt");
-var key = Encoding.UTF8.GetBytes(jwtSettings["Key"]);
+var key = Encoding.UTF8.GetBytes(jwtSettings["Key"] ?? throw new InvalidOperationException("JWT Key is not configured"));
 
 builder.Services.AddAuthentication(options =>
 {

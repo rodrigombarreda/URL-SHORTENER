@@ -114,18 +114,13 @@
           "name": "Resolver URL corta (redirect)",
           "request": {
             "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              }
-            ],
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/url/{{shortCode}}",
               "host": ["{{baseUrl}}"],
               "path": ["api", "url", "{{shortCode}}"]
             },
-            "description": "Resuelve un código corto y redirige (HTTP 302) a la URL original.\n\nPostman sigue el redirect automáticamente por defecto. Para ver el 302 crudo desactivá «Follow redirects» en la configuración del request (Settings → desactivar «Automatically follow redirects»)."
+            "description": "Resuelve un código corto y redirige (HTTP 302) a la URL original. Este endpoint es público — no requiere token JWT.\n\nPostman sigue el redirect automáticamente por defecto. Para ver el 302 crudo desactivá «Follow redirects» en la configuración del request (Settings → desactivar «Automatically follow redirects»)."
           }
         }
       ]

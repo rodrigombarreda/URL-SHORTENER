@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using UrlShortener.Core.Entities;
 using UrlShortener.Core.Repositories;
@@ -23,6 +24,7 @@ namespace UrlShortener.Infrastructure.Repositories
             if (string.IsNullOrWhiteSpace(urlTable.LongUrl))
                 throw new ArgumentException("LongUrl is required");
 
+            using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 _context.UrlTables.Add(urlTable);
@@ -31,28 +33,51 @@ namespace UrlShortener.Infrastructure.Repositories
                 urlTable.ShortCode = Base62Converter.Encode(urlTable.Id);
                 await _context.SaveChangesAsync();
 
+                await transaction.CommitAsync();
                 return urlTable.ShortCode;
+            }
+            catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+            {
+                await transaction.RollbackAsync();
+                var existing = await _context.UrlTables
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.LongUrl == urlTable.LongUrl);
+                return existing!.ShortCode!;
             }
             catch (DbUpdateException ex)
             {
-                _logger.LogError(ex, "Database update error while creating URL {LongUrl}", urlTable.LongUrl);
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "Database error while creating URL {LongUrl}", urlTable.LongUrl);
                 throw new ApplicationException("Error creating URL in database", ex);
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
             }
         }
 
-        public async Task<UrlTable> GetByShortCodeAsync(string shortCode)
+        private static bool IsUniqueConstraintViolation(DbUpdateException ex) =>
+            ex.InnerException is SqlException sqlEx && (sqlEx.Number == 2601 || sqlEx.Number == 2627);
+
+        public async Task<UrlTable?> GetByShortCodeAsync(string shortCode)
         {
             if (string.IsNullOrWhiteSpace(shortCode))
                 throw new ArgumentException("ShortCode is required");
 
-            var result = await _context.UrlTables
+            return await _context.UrlTables
                 .AsNoTracking()
                 .FirstOrDefaultAsync(u => u.ShortCode == shortCode);
+        }
 
-            if (result == null)
-                throw new KeyNotFoundException($"ShortCode {shortCode} not found");
+        public async Task<UrlTable?> GetByLongUrlAsync(string longUrl)
+        {
+            if (string.IsNullOrWhiteSpace(longUrl))
+                throw new ArgumentException("LongUrl is required");
 
-            return result;
+            return await _context.UrlTables
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.LongUrl == longUrl);
         }
 
     }

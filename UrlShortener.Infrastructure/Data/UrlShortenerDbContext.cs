@@ -32,7 +32,12 @@ namespace UrlShortener.Infrastructure.Data
                 .UseCollation("Latin1_General_100_BIN2");
 
             modelBuilder.Entity<UrlTable>()
-                .HasIndex(u => u.LongUrl);
+                .HasIndex(u => u.LongUrl)
+                .IsUnique();
+
+            modelBuilder.Entity<UrlTable>()
+                .Property(u => u.LongUrl)
+                .HasMaxLength(450);
         }
     }
 }

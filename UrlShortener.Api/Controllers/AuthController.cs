@@ -31,7 +31,6 @@ namespace UrlShortener.Api.Controllers
             var username = request.Username;
             var password = request.Password;
 
-            // Validación simple para demo
             if (username == "test" && password == "1234")
             {
                 var jwtSettings = _config.GetSection("Jwt");

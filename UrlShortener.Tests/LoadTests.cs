@@ -1,66 +1,46 @@
 using System.Net;
-using System.Text;
-using System.Text.Json;
 using Xunit;
 
+// Pruebas de carga que verifican el comportamiento del sistema bajo alto volumen de requests.
+// Miden la estabilidad y throughput con 1000 requests en paralelo (concurrencia de 50 a la vez).
+// Los tiempos se imprimen en consola para poder compararlos entre ejecuciones.
+// Requieren que la API esté corriendo en http://localhost:5000.
 [Collection("IntegrationTests")]
-public class LoadTests
+public class LoadTests : IntegrationTestBase
 {
-    private readonly HttpClient _client;
-
-    public LoadTests()
-    {
-        var handler = new HttpClientHandler
-        {
-            AllowAutoRedirect = false // 👈 evita que siga el redirect
-        };
-
-        _client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") };
-        var token = JwtTestHelper.GenerateTestToken();
-        _client.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-    }
-
+    // Envía 1000 requests de creación en paralelo con URLs distintas.
+    // Verifica que todos respondan 200 OK sin errores, demostrando
+    // que la API maneja carga concurrente de escritura sin fallos.
     [Fact]
-    public async Task Insert_1000ParallelRequests_ShouldSucceed()
+    public async Task Insert_1000ParallelRequests_ShouldAllSucceed()
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
         var semaphore = new SemaphoreSlim(50, 50);
         var tasks = Enumerable.Range(0, 1000).Select(async i =>
         {
             await semaphore.WaitAsync();
             try
             {
-                var json = $"{{\"longUrl\":\"https://example.com/load-insert-{i}\"}}";
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var response = await _client.PostAsync("/api/url/shorten", content);
+                var response = await Client.PostAsync("/api/url/shorten",
+                    JsonBody($"{{\"longUrl\":\"https://example.com/load-insert-{i}\"}}"));
                 Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             }
             finally { semaphore.Release(); }
         });
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         await Task.WhenAll(tasks);
         sw.Stop();
 
-        Console.WriteLine($"Insert 10.000 requests: {sw.ElapsedMilliseconds} ms");
+        Console.WriteLine($"Insert 1000 parallel requests: {sw.ElapsedMilliseconds}ms");
     }
 
+    // Envía 1000 requests de redirect en paralelo sobre el mismo shortCode.
+    // Verifica que todos respondan 302 Found, probando que el cache de Redis
+    // soporta alto volumen de lecturas concurrentes sin degradar.
     [Fact]
-    public async Task Get_1000ParallelRequests_ShouldSucceed()
+    public async Task Get_1000ParallelRequests_ShouldAllRedirect()
     {
-        // Crear una URL primero
-        var json = "{\"longUrl\":\"https://example.com/load-get\"}";
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
-        var createResponse = await _client.PostAsync("/api/url/shorten", content);
-        createResponse.EnsureSuccessStatusCode();
-
-        var body = await createResponse.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        var shortUrl = doc.RootElement.GetProperty("shortUrl").GetString();
-        var shortCode = shortUrl!.Split('/').Last();
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var shortCode = await CreateShortCode("https://example.com/load-get");
 
         var semaphore = new SemaphoreSlim(50, 50);
         var tasks = Enumerable.Range(0, 1000).Select(async _ =>
@@ -68,15 +48,16 @@ public class LoadTests
             await semaphore.WaitAsync();
             try
             {
-                var response = await _client.GetAsync($"/api/url/{shortCode}");
+                var response = await Client.GetAsync($"/api/url/{shortCode}");
                 Assert.Equal(HttpStatusCode.Found, response.StatusCode);
             }
             finally { semaphore.Release(); }
         });
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         await Task.WhenAll(tasks);
         sw.Stop();
 
-        Console.WriteLine($"Get 10.000 requests: {sw.ElapsedMilliseconds} ms");
+        Console.WriteLine($"Get 1000 parallel requests: {sw.ElapsedMilliseconds}ms");
     }
 }

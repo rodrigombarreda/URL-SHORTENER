@@ -9,7 +9,7 @@ public static class JwtTestHelper
     public static string GenerateTestToken()
     {
         var key = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes("EstaEsUnaClaveSuperSeguraDeAlMenos32Caracteres")); // debe ser la misma que uses en la API
+            Encoding.UTF8.GetBytes("EstaEsUnaClaveSuperSeguraDeAlMenos32Caracteres"));
 
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 

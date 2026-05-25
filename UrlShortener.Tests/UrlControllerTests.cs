@@ -1,119 +1,55 @@
-﻿using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text;
-using System.Text.Json;
-using System.Threading.Tasks;
-using Xunit;
 using System.Net;
+using Xunit;
 
+// Pruebas de integración del flujo principal del UrlController.
+// Verifican el happy path (crear y redirigir), el comportamiento de autenticación,
+// y que el endpoint de redirect sea de acceso público.
+// Requieren que la API esté corriendo en http://localhost:5000.
 [Collection("IntegrationTests")]
-public class UrlControllerTests
+public class UrlControllerTests : IntegrationTestBase
 {
-    private readonly HttpClient _client;
-
-    public UrlControllerTests()
-    {
-        var handler = new HttpClientHandler
-        {
-            AllowAutoRedirect = false
-        };
-
-        _client = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("http://localhost:5000")
-        };
-
-        var token = JwtTestHelper.GenerateTestToken();
-        _client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", token);
-    }
-
+    // Verifica que al enviar una longUrl válida se obtiene un shortCode en la respuesta.
     [Fact]
     public async Task ShortenUrl_ShouldReturnShortCode()
     {
-        var json = "{\"longUrl\":\"https://example.com/test\"}";
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await Client.PostAsync("/api/url/shorten", JsonBody("{\"longUrl\":\"https://example.com/basic\"}"));
 
-        var response = await _client.PostAsync("/api/url/shorten", content);
         response.EnsureSuccessStatusCode();
-
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("shortUrl", body);
+        Assert.Contains("shortUrl", await response.Content.ReadAsStringAsync());
     }
 
+    // Verifica el flujo completo: crear una URL corta y luego resolver el redirect.
+    // Se espera HTTP 302 con el header Location apuntando a la URL original.
     [Fact]
-    public async Task GetLongUrl_ShouldRedirectToOriginal()
+    public async Task GetLongUrl_ShouldRedirectToOriginalUrl()
     {
-        var json = "{\"longUrl\":\"https://example.com/test-get\"}";
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
-        var createResponse = await _client.PostAsync("/api/url/shorten", content);
-        createResponse.EnsureSuccessStatusCode();
+        var shortCode = await CreateShortCode("https://example.com/redirect-test");
 
-        var body = await createResponse.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        var shortUrl = doc.RootElement.GetProperty("shortUrl").GetString();
+        var response = await Client.GetAsync($"/api/url/{shortCode}");
 
-        Assert.NotNull(shortUrl);
-
-        var shortCode = shortUrl!.Contains("/")
-            ? shortUrl.Split('/').Last()
-            : shortUrl;
-
-        shortCode = shortCode.Trim();
-        var getResponse = await _client.GetAsync($"/api/url/{shortCode}");
-
-        Assert.Equal(System.Net.HttpStatusCode.Found, getResponse.StatusCode);
-        Assert.Equal("https://example.com/test-get", getResponse.Headers.Location?.ToString());
+        Assert.Equal(HttpStatusCode.Found, response.StatusCode);
+        Assert.Equal("https://example.com/redirect-test", response.Headers.Location?.ToString());
     }
 
+    // Verifica que el endpoint de creación requiere autenticación JWT.
+    // Un request sin token debe ser rechazado con 401.
     [Fact]
-    public async Task ShortenUrl_1000ParallelRequests()
+    public async Task ShortenUrl_WithoutToken_ShouldReturnUnauthorized()
     {
-        var semaphore = new SemaphoreSlim(50, 50);
-        var tasks = Enumerable.Range(0, 1000).Select(async i =>
-        {
-            await semaphore.WaitAsync();
-            try
-            {
-                var json = $"{{\"longUrl\":\"https://example.com/test-{i}\"}}";
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var response = await _client.PostAsync("/api/url/shorten", content);
-                response.EnsureSuccessStatusCode();
-            }
-            finally { semaphore.Release(); }
-        });
+        var response = await UnauthenticatedClient.PostAsync("/api/url/shorten", JsonBody("{\"longUrl\":\"https://example.com/no-auth\"}"));
 
-        await Task.WhenAll(tasks);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    // Verifica que el endpoint de redirect es público ([AllowAnonymous]).
+    // Un usuario sin token debe poder seguir un link corto sin autenticarse.
     [Fact]
-    public async Task GetLongUrl_1000ParallelRequests()
+    public async Task GetLongUrl_WithoutToken_ShouldStillRedirect()
     {
-        // Crear una URL primero
-        var json = "{\"longUrl\":\"https://example.com/load-get\"}";
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
-        var createResponse = await _client.PostAsync("/api/url/shorten", content);
-        createResponse.EnsureSuccessStatusCode();
+        var shortCode = await CreateShortCode("https://example.com/public-redirect");
 
-        var body = await createResponse.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        var shortUrl = doc.RootElement.GetProperty("shortUrl").GetString();
-        var shortCode = shortUrl!.Split('/').Last();
+        var response = await UnauthenticatedClient.GetAsync($"/api/url/{shortCode}");
 
-        // 1000 GET en paralelo
-        var semaphore = new SemaphoreSlim(50, 50);
-        var tasks = Enumerable.Range(0, 1000).Select(async _ =>
-        {
-            await semaphore.WaitAsync();
-            try
-            {
-                var response = await _client.GetAsync($"/api/url/{shortCode}");
-                Assert.Equal(HttpStatusCode.Found, response.StatusCode);
-            }
-            finally { semaphore.Release(); }
-        });
-
-        await Task.WhenAll(tasks);
+        Assert.Equal(HttpStatusCode.Found, response.StatusCode);
     }
-
 }

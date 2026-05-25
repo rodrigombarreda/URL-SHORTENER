@@ -2,6 +2,6 @@ namespace UrlShortener.Core.DTOs
 {
     public class CreateShortenUrlResponse
     {
-        public string ShortUrl { get; set; }
+        public required string ShortUrl { get; set; }
     }
 }

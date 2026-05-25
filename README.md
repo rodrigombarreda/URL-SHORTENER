@@ -69,12 +69,11 @@ Respuesta:
 ### 3. Resolver una URL corta
 
 ```bash
-curl -L -X GET http://localhost:5000/api/url/G8 \
-  -H "Authorization: Bearer <token>"
+curl -L -X GET http://localhost:5000/api/url/G8
 ```
 
 Devuelve HTTP **302** con el header `Location` apuntando a la URL original.  
-Con `-L`, `curl` sigue el redirect automáticamente.
+Con `-L`, `curl` sigue el redirect automáticamente. Este endpoint es público — no requiere token.
 
 ---
 
@@ -147,6 +146,6 @@ URL-SHORTENER/
 |--------|--------------------------|------|---------------------------------|
 | POST   | `/api/auth/login`        | No   | Obtiene token JWT               |
 | POST   | `/api/url/shorten`       | JWT  | Acorta una URL larga            |
-| GET    | `/api/url/{shortCode}`   | JWT  | Redirige (302) a la URL original |
+| GET    | `/api/url/{shortCode}`   | No   | Redirige (302) a la URL original |
 | GET    | `/metrics`               | No   | Métricas Prometheus             |
 

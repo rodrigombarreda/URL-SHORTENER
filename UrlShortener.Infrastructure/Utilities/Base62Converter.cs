@@ -8,13 +8,14 @@ namespace UrlShortener.Infrastructure.Utilities
         {
             if (id == 0) return "0";
 
-            string result = "";
+            Span<char> buffer = stackalloc char[10];
+            int pos = buffer.Length;
             while (id > 0)
             {
-                result = Base62Chars[id % 62] + result;
+                buffer[--pos] = Base62Chars[id % 62];
                 id /= 62;
             }
-            return result;
+            return new string(buffer[pos..]);
         }
     }
 }
