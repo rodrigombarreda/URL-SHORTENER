@@ -50,24 +50,12 @@ UrlShortener.Tests         → Tests unitarios, de integración y carga
 | Caché           | Redis (StackExchange.Redis 2.13)                |
 | Autenticación   | JWT Bearer (Microsoft.AspNetCore.Authentication)|
 | Métricas        | Prometheus (`prometheus-net.AspNetCore`)        |
-| Observabilidad  | OpenTelemetry 1.15                              |
 | Contenedores    | Docker Compose (API + SQL Server + Redis)       |
-| Tests           | xUnit 2.9.3 + NSubstitute 5.3.0 + coverlet     |
+| Tests           | xUnit 2.9.3 + coverlet 6.0.4                   |
 
 ---
 
-## 3. Trade-offs
-
-- **Base62 vs GUID**: Base62 produce códigos compactos y legibles (`G8` en lugar de un UUID). Los GUIDs serían más únicos globalmente pero no son URL-friendly.
-- **Redis vs InMemoryCache**: Redis permite escalar horizontalmente con múltiples instancias de API. InMemory sería más simple pero los cachés no se compartirían entre instancias.
-- **EF Core vs Dapper**: EF Core facilita las migraciones y consultas con LINQ. Dapper tendría mejor throughput puro, pero más código manual.
-- **Middleware global vs try/catch en controllers**: El middleware centraliza el manejo de errores y evita duplicación. Permite un formato de respuesta uniforme sin tocar cada controller.
-- **Generación del shortCode en dos pasos**: Se inserta primero la entidad para obtener el ID autogenerado y luego se codifica en Base62. Ambas operaciones se envuelven en una transacción para evitar registros sin shortCode si el segundo save falla.
-- **Race condition en creación**: En lugar de un distributed lock (más complejo), se usa un unique constraint en `LongUrl` a nivel DB. Si dos requests concurrentes intentan crear la misma URL, uno gana y el otro atrapa la `DbUpdateException`, hace rollback y retorna el registro ya existente. Simple, correcto y sin dependencias adicionales.
-
----
-
-## 4. Manejo de Errores
+## 3. Manejo de Errores
 
 El `ErrorHandlingMiddleware` mapea excepciones a respuestas HTTP:
 
@@ -82,7 +70,7 @@ Formato de respuesta siempre: `{ "code": 4xx/5xx, "message": "...", "timestamp":
 
 ---
 
-## 5. Seguridad
+## 4. Seguridad
 
 - JWT con claims de nombre y rol (`User`) firmado con clave simétrica HS256
 - El endpoint de creación (`POST /shorten`) requiere JWT; el redirect (`GET /{shortCode}`) es público por diseño
@@ -91,17 +79,16 @@ Formato de respuesta siempre: `{ "code": 4xx/5xx, "message": "...", "timestamp":
 
 ---
 
-## 6. Observabilidad
+## 5. Observabilidad
 
 - **Prometheus**: métricas expuestas en `/metrics`
   - `urls_created_total`: contador de URLs acortadas creadas
   - `urls_redirected_total`: contador de redirecciones resueltas
-- **OpenTelemetry**: trazas distribuidas configuradas
 - **Structured logging**: `ILogger<T>` en todas las capas
 
 ---
 
-## 7. Caching
+## 6. Caching
 
 - Redis como caché distribuido con TTL de 10 minutos por entrada
 - Fallback automático a SQL si Redis no está disponible: `GetAsync` retorna null, `SetAsync` loguea el error y continúa — el cache es una optimización, no un hard dependency
@@ -113,7 +100,7 @@ Formato de respuesta siempre: `{ "code": 4xx/5xx, "message": "...", "timestamp":
 
 ---
 
-## 8. Testing
+## 7. Testing
 
 | Archivo                      | Tipo        | Descripción                                                                 |
 |------------------------------|-------------|-----------------------------------------------------------------------------|
@@ -128,7 +115,7 @@ Formato de respuesta siempre: `{ "code": 4xx/5xx, "message": "...", "timestamp":
 
 ---
 
-## 9. Deployment
+## 8. Deployment
 
 ```yaml
 # docker-compose.yml
@@ -142,7 +129,7 @@ Levantar todo el sistema: `docker compose up --build`
 
 ---
 
-## 10. Uso de AI
+## 9. Uso de AI
 
 Durante el desarrollo se usaron herramientas de AI (GitHub Copilot, Claude Code) para:
 
