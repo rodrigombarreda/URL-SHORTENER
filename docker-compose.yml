@@ -1,40 +1,47 @@
 services:
+
+  # ── API ────────────────────────────────────────────────────────────────────
   api:
     build:
-      context: .
+      context: .                              # Raíz del repo como contexto de build
       dockerfile: UrlShortener.Api/Dockerfile
     ports:
-      - "5000:8080"
+      - "5000:8080"                           # Puerto del host : puerto interno del contenedor
     depends_on:
       redis:
-        condition: service_started
+        condition: service_started            # Arranca cuando Redis ya está corriendo
       sqlserver:
-        condition: service_healthy
+        condition: service_healthy            # Arranca solo cuando SQL Server pasa el healthcheck
     environment:
+      # Variables de entorno que sobreescriben appsettings.json dentro del contenedor
+      # Los __ reemplazan : en la jerarquía de configuración de ASP.NET Core
       - ConnectionStrings__Redis=redis:6379
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=UrlShortenerDb;User=sa;Password=Your_password123;TrustServerCertificate=True;
 
+  # ── Redis ──────────────────────────────────────────────────────────────────
   redis:
     image: redis:latest
     container_name: redis
     ports:
-      - "6379:6379"
+      - "6379:6379"                           # Expone Redis al host (útil para debug con RedisInsight)
 
+  # ── SQL Server ────────────────────────────────────────────────────────────
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: sqlserver
     ports:
-      - "1433:1433"
+      - "1433:1433"                           # Puerto estándar de SQL Server
     environment:
-      - ACCEPT_EULA=Y
+      - ACCEPT_EULA=Y                         # Aceptación obligatoria de la licencia de Microsoft
       - SA_PASSWORD=Your_password123
     healthcheck:
+      # Ejecuta una query mínima para confirmar que SQL Server está listo para recibir conexiones
       test:
         [
           "CMD-SHELL",
           '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "Your_password123" -C -Q "SELECT 1"',
         ]
-      interval: 5s
-      timeout: 10s
-      retries: 20
-      start_period: 30s
+      interval: 5s        # Repite el chequeo cada 5 segundos
+      timeout: 10s        # Falla si no responde en 10 segundos
+      retries: 20         # Hasta 20 intentos antes de marcar el servicio como unhealthy
+      start_period: 30s   # Espera 30 segundos antes de empezar a contar fallos (SQL Server tarda en arrancar)

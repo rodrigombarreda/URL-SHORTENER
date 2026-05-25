@@ -5,6 +5,11 @@ using System.Text.Json;
 
 namespace UrlShortener.Api.Middleware
 {
+    // Middleware global de manejo de errores. Envuelve todo el pipeline HTTP en un try/catch
+    // centralizado para que ninguna excepción no manejada llegue al cliente como un error 500
+    // genérico o, peor, exponiendo detalles internos del sistema. Mapea tipos de excepción a
+    // códigos HTTP específicos (ArgumentException → 400, KeyNotFoundException → 404, etc.) y
+    // devuelve siempre una respuesta JSON consistente con { code, message, timestamp }.
     public class ErrorHandlingMiddleware
     {
         private readonly RequestDelegate _next;

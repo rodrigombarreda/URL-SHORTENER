@@ -50,7 +50,7 @@ builder.Services.AddControllers()
     });
 builder.Services.AddOpenApi();
 
-// Redis
+// Conexión única a Redis; compartida entre todos los consumidores de DI
 builder.Services.AddSingleton<IConnectionMultiplexer>(
    ConnectionMultiplexer.Connect(builder.Configuration["ConnectionStrings:Redis"] ?? "redis:6379"));
 
@@ -80,8 +80,12 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 // Prometheus: expone /metrics y mide requests HTTP
-app.UseMetricServer();   // Endpoint /metrics
-app.UseHttpMetrics();    // Métricas automáticas de requests
+//Expone un endpoint HTTP en /metrics que devuelve todas las métricas registradas en 
+//formato Prometheus (texto plano). Prometheus scrapeará este endpoint periódicamente.
+app.UseMetricServer();
+//Registra un middleware que automáticamente mide cada request HTTP: duración, código de respuesta, método, ruta, etc. 
+//Publica esos datos como métricas en /metrics.
+app.UseHttpMetrics();
 
 // Controllers
 app.MapControllers();
